@@ -1,3 +1,72 @@
+version 1.5.0 (2020-02-02):
+	* Search is now backwards by default (Sebastian Geiger).
+	* Tilda now handles monitor changes and adjusts its size automatically.
+	  This is useful in cases when a notebook is connected to an external
+	  monitor (Sebastian Geiger).
+	* Tilda now stores the relative sizes of the window in percent rather
+	  than the absolute values in pixels (Sebastian Geiger).
+	* The confirmation dialogs for confirm tab close and prompt on exit are
+	  now enabled by default (Sebastian Geiger).
+	* When using the block cursor, the background color of the cursor
+	  is now correctly applied (Brian Hsu).
+	* Fixed issue in transparency. Fixes #269 (Sebastian Geiger).
+	* Fixed a resize issue in fullscreen mode. Fixes #306 (Sebastian Geiger).
+	* Tilda now uses asynchronous command spawning. A new option supports
+	  changing the default timeout when spawning a command
+	  (default is 3 seconds) (Sebastian Geiger).
+	* Various fixes related to the window title. Tooltips now display
+	  full tab title (Tom Briden). Fixed missing title on initial window and
+	  fixed a problem with setting the title when switching between tabs. Also
+	  the computation of the title is now more consistent between the window
+	  title, tooltips and the tab title (Sebastian Geiger).
+	* When loading configuration files tilda follows symlinks.
+	  Fixes #327 (Sebastian Geiger).
+	* Tilda now uses xdg-open to open web links rather
+	  than x-www-browser (lucasbru).
+	* In non-X11 environments such as Wayland tilda will now always use the
+	  X11 backend (Roman Hoellen).
+	* Exclamation mark '!' is now supported by the HTTP regex for detecting
+	  web links.
+	* Added a check if lock dir exists which avoids a warning when tilda
+	  starts the first time and the lock dir has not been created yet
+	  (Sebastian Geiger).
+	* We now correctly free the resources when closing the a terminal tab
+	  (Sebastian Geiger).
+	* Tilda now uses structured logging. In debug mode tilda will automatically
+	  output all debug messages. In non-debug mode, debug messages can still
+	  be output by exporting G_MESSAGES_DEBUG=tilda (Sebastian Geiger).
+	* Removed 'Allow Bold' option (Sebastian Geiger).
+	* Removed deprecated antialiasing option (Sebastian Geiger).
+	* Dropped support for older VTE versions (Sebastian Geiger).
+
+version 1.4.1 (2018-02-08):
+	* Updated language files (Sebastian Geiger)
+
+version 1.4.0 (2018-02-03):
+	* Fixes a problem with close-tab action in the context menu (Alexander Maznev)
+	* The default word matching expression now matches IPv6 addresses (Srđan Panić)
+	* The keybindings in the wizard are now displayed in form of a list
+	  (Sivno Toranaga-San, Alexander Maznev, Sebastian Geiger)
+	* Fixed an issue which broke the transparency feature after changing the color scheme
+	  (Corentin Néau)
+	* Fixed an issue that prevented the initial tab title from being correctly
+	  set (Hoel Kervadec)
+	* Tilda now supports a new command line option to specify the configuration 
+	  file (Corentin Néau)
+	* The 'Tab Position' option has been moved to appearance section in the wizard
+	  (Tom Briden)
+	* New option 'Expand Tabs' causes tabs in the tilda window to fill
+	  all available horizontal space (Tom Briden)
+	* New option 'Show Single Tab' to show the tab bar also when only a single tab
+	  is open (Tom Briden)
+	* Tilda can now be configured to show a confirmation dialog when closing
+	  a tab or when when tilda is closed (Sebastian Geiger)
+	* Tilda now knows a new color scheme called 'Snazzy' (Thanks to devtrium)
+	* The tab title learned more options to configure behavior of long
+	  tab tiles (Tom Briden)
+	* The option for double buffering has long been deprecated and was 
+	  removed in this release (Sebastian Geiger)
+
 version 1.3.2 (2016-02-14):
 	* Updated Hacking.md's instructions to reflect VTE 2.91 api bump (Thanks to HiTuX)
 	* Added a widget name to the search widget for easier styling (Sebastian Geiger)

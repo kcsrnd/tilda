@@ -13,7 +13,7 @@
  * License along with this library. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <tilda-config.h>
+#include "config.h"
 
 #include "debug.h"
 #include "tilda.h"
@@ -21,7 +21,9 @@
 #include "tilda_window.h"
 #include "tilda_terminal.h"
 #include "key_grabber.h"
+#include "vte-util.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +43,12 @@ static gboolean show_confirmation_dialog (tilda_window *tw,
 
 static void tilda_window_apply_transparency (tilda_window *tw,
                                              gboolean status);
+
+static gboolean update_tilda_window_size (gpointer user_data);
+
+static GdkFilterReturn window_filter_function (GdkXEvent *xevent,
+                                               GdkEvent *event,
+                                               gpointer data);
 
 static void
 tilda_window_setup_alpha_mode (tilda_window *tw)
@@ -172,11 +180,6 @@ void tilda_window_set_fullscreen(tilda_window *tw)
   }
   else {
     gtk_window_unfullscreen (GTK_WINDOW (tw->window));
-    // This appears to be necssary on (at least) xfwm4 if you tabbed out
-    // while fullscreened.
-    gtk_window_set_default_size (GTK_WINDOW(tw->window), config_getint ("max_width"), config_getint ("max_height"));
-    gtk_window_resize (GTK_WINDOW(tw->window), config_getint ("max_width"), config_getint ("max_height"));
-    gtk_window_move(GTK_WINDOW(tw->window), config_getint ("x_pos"), config_getint ("y_pos"));
   }
 }
 
@@ -194,7 +197,7 @@ gint toggle_fullscreen_cb (tilda_window *tw)
     return GDK_EVENT_STOP;
 }
 
-gint toggle_transparency_cb (tilda_window *tw)
+static gint toggle_transparency_cb (tilda_window *tw)
 {
     DEBUG_FUNCTION ("toggle_transparency");
     DEBUG_ASSERT (tw != NULL);
@@ -220,29 +223,6 @@ static void tilda_window_apply_transparency (tilda_window *tw, gboolean status)
     tilda_term *tt;
     guint i;
 
-#ifdef VTE_290
-    gdouble transparency_level = 0.0;
-    transparency_level = ((gdouble) config_getint ("transparency"))/100;
-
-    if (status)
-    {
-        for (i=0; i<g_list_length (tw->terms); i++) {
-            tt = g_list_nth_data (tw->terms, i);
-            vte_terminal_set_background_saturation (VTE_TERMINAL(tt->vte_term), transparency_level);
-            vte_terminal_set_background_transparent(VTE_TERMINAL(tt->vte_term), !tw->have_argb_visual);
-            vte_terminal_set_opacity (VTE_TERMINAL(tt->vte_term), (1.0 - transparency_level) * 0xffff);
-        }
-    }
-    else
-    {
-        for (i=0; i<g_list_length (tw->terms); i++) {
-            tt = g_list_nth_data (tw->terms, i);
-            vte_terminal_set_background_saturation (VTE_TERMINAL(tt->vte_term), 0);
-            vte_terminal_set_background_transparent(VTE_TERMINAL(tt->vte_term), FALSE);
-            vte_terminal_set_opacity (VTE_TERMINAL(tt->vte_term), 0xffff);
-        }
-    }
-#else
     GdkRGBA bg;
     bg.red   =    GUINT16_TO_FLOAT(config_getint ("back_red"));
     bg.green =    GUINT16_TO_FLOAT(config_getint ("back_green"));
@@ -253,22 +233,75 @@ static void tilda_window_apply_transparency (tilda_window *tw, gboolean status)
             tt = g_list_nth_data (tw->terms, i);
             vte_terminal_set_color_background(VTE_TERMINAL(tt->vte_term), &bg);
         }
-#endif
 }
 
-gint tilda_window_toggle_searchbar (tilda_window *tw)
+static gboolean
+search_gregex_cb (TildaSearchBox       *search,
+                  GRegex               *regex,
+                  TildaSearchDirection  direction,
+                  gboolean              wrap_on_search,
+                  tilda_window         *tw)
 {
-    DEBUG_FUNCTION ("toggle_searbar");
-    DEBUG_ASSERT (tw != NULL);
-    DEBUG_ASSERT (tw->search != NULL);
-    gboolean visible = !gtk_widget_get_visible(tw->search->search_box);
-    if (visible) {
-        gtk_widget_grab_focus (tw->search->entry_search);
-    } else {
-        gtk_widget_grab_focus (tilda_window_get_current_terminal (tw)->vte_term);
-    }
-    gtk_widget_set_visible(tw->search->search_box, visible);
-    return GDK_EVENT_STOP;
+    VteTerminal *vte_terminal;
+    tilda_term *term;
+
+    term = tilda_window_get_current_terminal (tw);
+
+    vte_terminal = VTE_TERMINAL (term->vte_term);
+
+    vte_terminal_search_set_gregex (vte_terminal, regex, (GRegexMatchFlags) 0);
+
+    vte_terminal_search_set_wrap_around (vte_terminal, wrap_on_search);
+
+    if (direction == SEARCH_BACKWARD)
+        return vte_terminal_search_find_previous (vte_terminal);
+    else
+        return vte_terminal_search_find_next (vte_terminal);
+}
+
+static gboolean
+search_cb (TildaSearchBox       *search,
+           VteRegex             *regex,
+           TildaSearchDirection  direction,
+           gboolean              wrap_on_search,
+           tilda_window         *tw)
+{
+  VteTerminal *vte_terminal;
+  tilda_term *term;
+
+  term = tilda_window_get_current_terminal (tw);
+
+  vte_terminal = VTE_TERMINAL (term->vte_term);
+
+  vte_terminal_search_set_regex (vte_terminal, regex, (GRegexMatchFlags) 0);
+
+  vte_terminal_search_set_wrap_around (vte_terminal, wrap_on_search);
+
+  if (direction == SEARCH_BACKWARD)
+    return vte_terminal_search_find_previous (vte_terminal);
+  else
+    return vte_terminal_search_find_next (vte_terminal);
+}
+
+static void
+search_focus_out_cb (TildaSearchBox *box,
+                     tilda_window   *tw)
+{
+  gtk_widget_grab_focus (tilda_window_get_current_terminal (tw)->vte_term);
+}
+
+static gboolean
+toggle_searchbar_cb (tilda_window *tw)
+{
+  tilda_window_toggle_searchbar (tw);
+
+  return GDK_EVENT_STOP;
+}
+
+void
+tilda_window_toggle_searchbar (tilda_window *tw)
+{
+  tilda_search_box_toggle (TILDA_SEARCH_BOX (tw->search));
 }
 
 /* Zoom helpers */
@@ -657,7 +690,8 @@ static gint ccopy (tilda_window *tw)
     if GTK_IS_SCROLLBAR(list->data) {
         list = list->next;
     }
-    vte_terminal_copy_clipboard (VTE_TERMINAL(list->data));
+
+    vte_terminal_copy_clipboard_format (VTE_TERMINAL(list->data), VTE_FORMAT_TEXT);
 
     return GDK_EVENT_STOP;
 }
@@ -728,7 +762,7 @@ static gint tilda_window_setup_keyboard_accelerators (tilda_window *tw)
     tilda_add_config_accelerator_by_path("fullscreen_key", "<tilda>/context/Toggle Fullscreen", G_CALLBACK(toggle_fullscreen_cb),           tw);
     tilda_add_config_accelerator_by_path("quit_key",       "<tilda>/context/Quit",              G_CALLBACK(tilda_window_confirm_quit),      tw);
     tilda_add_config_accelerator_by_path("toggle_transparency_key", "<tilda>/context/Toggle Transparency", G_CALLBACK(toggle_transparency_cb),      tw);
-    tilda_add_config_accelerator_by_path("toggle_searchbar_key", "<tilda>/context/Toggle Searchbar", G_CALLBACK(tilda_window_toggle_searchbar),     tw);
+    tilda_add_config_accelerator_by_path("toggle_searchbar_key", "<tilda>/context/Toggle Searchbar", G_CALLBACK(toggle_searchbar_cb),       tw);
 
     tilda_add_config_accelerator_by_path("nexttab_key",      "<tilda>/context/Next Tab",        G_CALLBACK(tilda_window_next_tab),          tw);
     tilda_add_config_accelerator_by_path("prevtab_key",      "<tilda>/context/Previous Tab",    G_CALLBACK(tilda_window_prev_tab),          tw);
@@ -766,68 +800,6 @@ static tilda_term* tilda_window_get_current_terminal (tilda_window *tw) {
     return NULL;
 }
 
-static void tilda_window_search (G_GNUC_UNUSED GtkWidget *widget, tilda_window *tw, gboolean terminal_search_backwards) {
-    GRegexCompileFlags compile_flags = G_REGEX_OPTIMIZE;
-    gboolean wrap_on_search = FALSE;
-    tilda_search *search = tw->search;
-    gboolean is_regex = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (search->check_regex));
-    const gchar *text = gtk_entry_buffer_get_text (GTK_ENTRY_BUFFER (gtk_entry_get_buffer (GTK_ENTRY (search->entry_search))));
-
-    if (!search->is_search_result) {
-        wrap_on_search = TRUE;
-    }
-
-    gchar *pattern;
-    if (is_regex) {
-        compile_flags |= G_REGEX_MULTILINE;
-        pattern = (gchar *) text;
-    }
-    else {
-        pattern = g_regex_escape_string (text, -1);
-    }
-    if (!gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (search->check_match_case))) {
-        compile_flags |= G_REGEX_CASELESS;
-    }
-
-    tilda_term* term = tilda_window_get_current_terminal (tw);
-    GtkWidget *vteTerminal = term->vte_term;
-
-    GError *error = NULL;
-    GRegex *regex = g_regex_new (pattern, compile_flags, G_REGEX_MATCH_NEWLINE_ANY, &error);
-#ifdef VTE_290
-    vte_terminal_search_set_gregex (VTE_TERMINAL (vteTerminal), regex);
-#else
-    vte_terminal_search_set_gregex (VTE_TERMINAL (vteTerminal), regex, 0);
-#endif
-    vte_terminal_search_set_wrap_around (VTE_TERMINAL (vteTerminal), wrap_on_search);
-
-    gboolean search_result;
-    if (terminal_search_backwards) {
-        search_result = vte_terminal_search_find_previous (VTE_TERMINAL (vteTerminal));
-    }
-    else {
-        search_result = vte_terminal_search_find_next (VTE_TERMINAL (vteTerminal));
-    }
-
-    gtk_widget_set_visible (search->label_search_end, !search_result);
-    search->is_search_result = search_result;
-
-    /* If the text was not a regex, then we escaped the text with g_regex_escape_string and so we need to free it. */
-    if (!is_regex) {
-        g_free (pattern);
-    }
-    g_regex_unref(regex);
-}
-
-static void tilda_window_search_forward_cb (GtkWidget *button, tilda_window *tw) {
-    /* The default is to search forward */
-    tilda_window_search (button, tw, FALSE);
-}
-
-static void tilda_window_search_backward_cb (GtkWidget *button, tilda_window *tw) {
-    tilda_window_search (button, tw, TRUE);
-}
-
 static gint tilda_window_set_icon (tilda_window *tw, gchar *filename)
 {
     GdkPixbuf *window_icon = gdk_pixbuf_new_from_file (filename, NULL);
@@ -854,60 +826,6 @@ static gboolean delete_event_callback (G_GNUC_UNUSED GtkWidget *widget,
     return FALSE;
 }
 
-gboolean search_box_key_cb (GtkWidget *widget, GdkEvent  *event, tilda_window *tw) {
-    GdkEventKey *event_key = (GdkEventKey*)event;
-    if (event_key->keyval == GDK_KEY_Return) {
-        tilda_window_search(widget, tw, FALSE);
-        return GDK_EVENT_STOP;
-    }
-
-    /* If the search entry has focus the user can hide the search bar by pressing escape. */
-    if (event_key->keyval == GDK_KEY_Escape) {
-        if (gtk_widget_has_focus (tw->search->entry_search)) {
-            gtk_widget_grab_focus (tilda_window_get_current_terminal (tw)->vte_term);
-            gtk_widget_set_visible (tw->search->search_box, FALSE);
-            return GDK_EVENT_STOP;
-        }
-    }
-
-    return GDK_EVENT_PROPAGATE;
-}
-
-gboolean entry_search_text_changed_callback (G_GNUC_UNUSED GtkEditable *editable,
-                                             tilda_window *tw) {
-    gtk_widget_hide (tw->search->label_search_end);
-    tw->search->is_search_result = TRUE;
-
-    return GDK_EVENT_STOP;
-}
-
-static tilda_search *tilda_search_box_init(tilda_window *tw)
-{
-    DEBUG_FUNCTION ("tilda_search_box_init");
-    GtkBuilder *gtk_builder = tw->gtk_builder;
-
-    tilda_search *search = malloc(sizeof(tilda_search));
-
-    search->search_box = GTK_WIDGET(gtk_builder_get_object (gtk_builder, "search_box"));
-    gtk_widget_set_name (GTK_WIDGET (search->search_box), "search");
-
-    DEBUG_ASSERT(search->search_box != NULL);
-    search->button_next = GTK_WIDGET (gtk_builder_get_object (gtk_builder, "button_search_next"));
-    search->button_prev = GTK_WIDGET (gtk_builder_get_object (gtk_builder, "button_search_prev"));
-    search->entry_search = GTK_WIDGET (gtk_builder_get_object (gtk_builder, "entry_search"));
-    search->check_match_case = GTK_WIDGET (gtk_builder_get_object (gtk_builder, "check_match_case"));
-    search->check_regex = GTK_WIDGET (gtk_builder_get_object (gtk_builder, "check_regex"));
-    search->label_search_end = GTK_WIDGET (gtk_builder_get_object (gtk_builder, "search_label"));
-    /* Initialize to true to prevent search from wrapping around on first search. */
-    search->is_search_result = TRUE;
-
-    g_signal_connect (G_OBJECT (search->button_next), "clicked", G_CALLBACK (tilda_window_search_forward_cb), tw);
-    g_signal_connect (G_OBJECT (search->button_prev), "clicked", G_CALLBACK (tilda_window_search_backward_cb), tw);
-    g_signal_connect (G_OBJECT(search->entry_search), "key-press-event", G_CALLBACK(search_box_key_cb), tw);
-    g_signal_connect (G_OBJECT (search->entry_search), "changed", G_CALLBACK (entry_search_text_changed_callback), tw);
-    return search;
-}
-
 /* Detect changes in GtkNotebook tab order and update the tw->terms list to reflect such changes. */
 static void page_reordered_cb (GtkNotebook  *notebook,
                         GtkWidget    *child,
@@ -915,21 +833,46 @@ static void page_reordered_cb (GtkNotebook  *notebook,
                         tilda_window *tw) {
     DEBUG_FUNCTION ("page_reordered_cb");
     GList *terminals;
-    tilda_term *tilda_term;
+    tilda_term *terminal;
     guint i;
 
     terminals = tw->terms;
 
     for (i = 0; i < g_list_length (terminals); i++)
     {
-        tilda_term = g_list_nth_data (terminals, i);
-        if (tilda_term->hbox == child) {
-            terminals = g_list_remove (terminals, tilda_term);
-            tw->terms = g_list_insert (terminals, tilda_term, page_num);
+        terminal = g_list_nth_data (terminals, i);
+        if (terminal->hbox == child) {
+            terminals = g_list_remove (terminals, terminal);
+            tw->terms = g_list_insert (terminals, terminal, page_num);
             break;
         }
     }
 }
+
+static void switch_page_cb (GtkNotebook *notebook,
+                            GtkWidget   *page,
+                            guint        page_num,
+                            tilda_window *tw)
+{
+    DEBUG_FUNCTION ("tilda_terminal_switch_page_cb");
+    guint counter = 0;
+    tilda_term *term = NULL;
+    for(GList *item=tw->terms; item != NULL; item=item->next) {
+        if(counter == page_num) {
+            term = (tilda_term*) item->data;
+        }
+        counter++;
+    }
+
+    char * current_title = tilda_terminal_get_title (term);
+
+    if (current_title != NULL) {
+        gtk_window_set_title (GTK_WINDOW (tw->window), current_title);
+    }
+
+    g_free (current_title);
+}
+
 
 gboolean tilda_window_init (const gchar *config_file, const gint instance, tilda_window *tw)
 {
@@ -1077,27 +1020,51 @@ gboolean tilda_window_init (const gchar *config_file, const gint instance, tilda
      * of tilda_terms in the tw->terms structure in sync with the order of tabs. */
     g_signal_connect (G_OBJECT(tw->notebook), "page-reordered", G_CALLBACK (page_reordered_cb), tw);
 
-    /* Setup the tilda window. The tilda window consists of a toplevel window that contains the following widgets:
+    g_signal_connect (G_OBJECT (tw->notebook), "switch-page", G_CALLBACK (switch_page_cb), tw);
+
+    /* Setup the tilda window. The tilda window consists of a top level window that contains the following widgets:
      *   * The main_box holds a GtkNotebook with all the terminal tabs
-     *   * The search_box holds the search widgets and a label to indicate when the search has reached the bottom
+     *   * The search_box holds the TildaSearchBox widget
      */
     GtkWidget *main_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-    tw->search = tilda_search_box_init(tw);
+    tw->search = tilda_search_box_new ();
+
+    GtkStyleContext *context = gtk_widget_get_style_context(main_box);
+    gtk_style_context_add_class(context, GTK_STYLE_CLASS_BACKGROUND);
 
     gtk_container_add (GTK_CONTAINER(tw->window), main_box);
     gtk_box_pack_start (GTK_BOX (main_box), tw->notebook, TRUE, TRUE, 0);
-    gtk_box_pack_start (GTK_BOX (main_box), tw->search->search_box, FALSE, TRUE, 0);
+    gtk_box_pack_start (GTK_BOX (main_box), tw->search, FALSE, TRUE, 0);
 
+    if (VTE_CHECK_VERSION_RUMTIME (0, 56, 1)) {
+        g_signal_connect (tw->search, "search",
+                          G_CALLBACK (search_cb), tw);
+    } else {
+        g_signal_connect (tw->search, "search-gregex",
+                          G_CALLBACK (search_gregex_cb), tw);
+    }
+    g_signal_connect (tw->search, "focus-out",
+                      G_CALLBACK (search_focus_out_cb), tw);
 
     /* Show the widgets */
     gtk_widget_show_all (main_box);
-    gtk_widget_set_visible(tw->search->search_box, FALSE);
+    gtk_widget_set_visible(tw->search, FALSE);
     /* the tw->window widget will be shown later, by pull() */
 
     /* Position the window */
     tw->current_state = STATE_UP;
-    gtk_window_set_default_size (GTK_WINDOW(tw->window), config_getint ("max_width"), config_getint ("max_height"));
-    gtk_window_resize (GTK_WINDOW(tw->window), config_getint ("max_width"), config_getint ("max_height"));
+
+    GdkRectangle rectangle;
+    config_get_configured_window_size (&rectangle);
+
+    gint width = rectangle.width;
+    gint height = rectangle.height;
+
+    gtk_window_set_default_size (GTK_WINDOW(tw->window),
+                                 width,
+                                 height);
+
+    gtk_window_resize (GTK_WINDOW(tw->window), width, height);
 
     /* Create GDK resources now, to prevent crashes later on */
     gtk_widget_realize (tw->window);
@@ -1105,6 +1072,20 @@ gboolean tilda_window_init (const gchar *config_file, const gint instance, tilda
 
     /* Initialize wizard window reference to NULL */
     tw->wizard_window = NULL;
+
+    GdkScreen *screen;
+    GdkWindow *root;
+    GdkEventMask mask;
+
+    screen = gtk_widget_get_screen (GTK_WIDGET (tw->window));
+    root = gdk_screen_get_root_window (screen);
+
+    mask = gdk_window_get_events (root);
+    mask |= GDK_PROPERTY_CHANGE_MASK;
+
+    gdk_window_set_events (root, mask);
+
+    gdk_window_add_filter (root, window_filter_function, tw);
 
     return TRUE;
 }
@@ -1127,10 +1108,12 @@ gint tilda_window_free (tilda_window *tw)
     }
 
     g_free (tw->config_file);
-    g_free (tw->search);
+    gtk_widget_destroy (tw->search);
     if (tw->gtk_builder != NULL) {
         g_object_unref (G_OBJECT(tw->gtk_builder));
     }
+
+    tw->size_update_event_source = 0;
 
     return 0;
 }
@@ -1279,4 +1262,174 @@ gint tilda_window_confirm_quit (tilda_window *tw)
     }
 
     return GDK_EVENT_STOP;
+}
+
+GdkMonitor* tilda_window_find_monitor_number (tilda_window *tw)
+{
+    DEBUG_FUNCTION ("tilda_window_find_monitor_number");
+
+    GdkDisplay *display = gdk_display_get_default ();
+    gint n_monitors = gdk_display_get_n_monitors (gdk_display_get_default ());
+
+    gchar *show_on_monitor = config_getstr("show_on_monitor");
+
+    for(int i = 0; i < n_monitors; ++i) {
+        GdkMonitor *monitor = gdk_display_get_monitor (display, i);
+        const gchar *monitor_name = gdk_monitor_get_model (monitor);
+        if(0 == g_strcmp0 (show_on_monitor, monitor_name)) {
+            return monitor;
+        }
+    }
+
+    return gdk_display_get_primary_monitor (display);
+}
+
+gint tilda_window_find_centering_coordinate (tilda_window *tw,
+                                             enum dimensions dimension)
+{
+    DEBUG_FUNCTION ("tilda_window_find_centering_coordinate");
+
+    gdouble monitor_dimension = 0;
+    gdouble tilda_dimension = 0;
+    GdkMonitor *monitor = tilda_window_find_monitor_number (tw);
+    GdkRectangle rectangle;
+    gdk_monitor_get_workarea (monitor, &rectangle);
+
+    GdkRectangle tilda_rectangle;
+    config_get_configured_window_size (&tilda_rectangle);
+
+    if (dimension == HEIGHT) {
+        monitor_dimension = rectangle.height;
+        tilda_dimension = tilda_rectangle.height;
+    } else if (dimension == WIDTH) {
+        monitor_dimension = rectangle.width;
+        tilda_dimension = tilda_rectangle.width;
+    }
+    const gdouble screen_center = monitor_dimension / 2.0;
+    const gdouble tilda_center  = tilda_dimension  / 2.0;
+    gint center = (int) (screen_center - tilda_center);
+
+    if(dimension == HEIGHT) {
+        center += rectangle.y;
+    } else if (dimension == WIDTH) {
+        center += rectangle.x;
+    }
+    return center;
+}
+
+void
+tilda_window_update_window_position (tilda_window *tw)
+{
+    DEBUG_FUNCTION ("tilda_window_update_window_position");
+    /**
+     * If the screen size changed we might also need to recenter the
+     * tilda window.
+     */
+    gint pos_x, pos_y;
+    gboolean centered_horizontally = config_getbool ("centered_horizontally");
+    gboolean centered_vertically = config_getbool ("centered_vertically");
+
+    if (centered_horizontally) {
+        pos_x = tilda_window_find_centering_coordinate (tw, WIDTH);
+        config_setint ("x_pos", pos_x);
+        pos_y = (gint) config_getint ("y_pos");
+        gtk_window_move (GTK_WINDOW (tw->window), pos_x, pos_y);
+    }
+
+    if (centered_vertically) {
+        pos_y = tilda_window_find_centering_coordinate (tw, HEIGHT);
+        config_setint ("y_pos", pos_y);
+        pos_x = (gint) config_getint ("x_pos");
+        gtk_window_move (GTK_WINDOW (tw->window), pos_x, pos_y);
+    }
+}
+
+static gboolean update_tilda_window_size (gpointer user_data)
+{
+    tilda_window *tw = user_data;
+
+    g_debug ("Updating tilda window size in idle handler to "
+             "match new size of workarea.");
+
+    /* 1. Get current tilda window size */
+    int windowHeight = gtk_widget_get_allocated_height (GTK_WIDGET (tw->window));
+    int windowWidth = gtk_widget_get_allocated_width (GTK_WIDGET (tw->window));
+
+    gint newWidth = windowWidth;
+    gint newHeight = windowHeight;
+
+    /* 2. Get the desired size and update the tilda window size if necessary. */
+    GdkRectangle configured_geometry;
+    config_get_configured_window_size (&configured_geometry);
+
+    if (configured_geometry.width - windowWidth >= 1) {
+        newWidth = configured_geometry.width;
+    }
+
+    if (configured_geometry.height - windowHeight >= 1) {
+        newHeight = configured_geometry.height;
+    }
+
+    gtk_window_resize (GTK_WINDOW (tw->window),
+                       newWidth,
+                       newHeight);
+
+    tilda_window_update_window_position (tw);
+
+    /* 3. Returning G_SOURCE_REMOVE below will clear the event source in Gtk.
+     * Thus, we need to reset the ID such that a new event source can be
+     * registered if the workarea changes again. */
+    tw->size_update_event_source = 0;
+
+    return G_SOURCE_REMOVE;
+}
+
+/**
+ * This function inspects the incoming XEvents to find property events that
+ * update the workarea and as a result queues an update function which updates
+ * the tilda window size in case the workarea has changed.
+ *
+ * The reason we need this function is that in the signal handlers of
+ * the signals GdkScreen::monitors-changed and GdkScreen::size-changed
+ * we cannot reliably get the updated workarea. This is because the workarea
+ * is computed and update by the window manager only after the monitor
+ * resolution has changed. Thus, if we call gdk_monitor_get_workarea
+ * from the monitors-changed or size-changed signal handlers we will
+ * not get the correct workarea because the window manager has not yet
+ * updated the corresponding XProperty.
+ */
+static GdkFilterReturn window_filter_function (GdkXEvent *gdk_xevent,
+                                               GdkEvent *event,
+                                               gpointer user_data)
+{
+    tilda_window *tw = user_data;
+
+    XEvent *xevent = (XEvent *) gdk_xevent;
+
+    switch (xevent->type)
+    {
+        case PropertyNotify:
+        {
+            XPropertyEvent *propertyEvent;
+
+            propertyEvent = (XPropertyEvent *) xevent;
+
+            const Atom WORKAREA_ATOM = XInternAtom (propertyEvent->display,
+                                                    "_NET_WORKAREA", True);
+
+            if (propertyEvent->atom != WORKAREA_ATOM)
+                return GDK_FILTER_CONTINUE;
+
+            if (tw->size_update_event_source != 0)
+                return GDK_FILTER_CONTINUE;
+
+            tw->size_update_event_source = g_idle_add (update_tilda_window_size,
+                                                       user_data);
+
+            break;
+        }
+        default:break;
+    }
+
+    return GDK_FILTER_CONTINUE;
 }

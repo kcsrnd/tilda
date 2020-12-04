@@ -17,8 +17,10 @@
 #define TILDA_TERMINALN_H
 
 #include "tilda_window.h"
+#include "tilda-palettes.h"
 
 #include <gtk/gtk.h>
+#include <vte/vte.h>
 
 G_BEGIN_DECLS
 
@@ -30,12 +32,14 @@ struct tilda_term_
     GtkWidget *hbox;
     GtkWidget *scrollbar;
     GRegex *http_regexp;
+    VteRegex *vte_regexp;
     GPid pid;
     /* We remember if we have already dropped to the default
      * shell before, if so, then we know that this time we can
      * exit the program.
      */
     gboolean dropped_to_default_shell;
+    gchar *initial_working_dir;
 
     struct tilda_window_ *tw;
 };
@@ -79,13 +83,10 @@ char* tilda_term_get_cwd(tilda_term* tt);
 /* Adjust the font-size scale for the terminal */
 void tilda_term_adjust_font_scale(tilda_term *term, gdouble scale);
 
+gchar * tilda_terminal_get_full_title (tilda_term *tt);
 gchar * tilda_terminal_get_title (tilda_term *tt);
 
 #define TILDA_TERM(tt) ((tilda_term *)(tt))
-
-#define TERMINAL_PALETTE_SIZE 16
-
-extern GdkRGBA current_palette[TERMINAL_PALETTE_SIZE];
 
 G_END_DECLS
 

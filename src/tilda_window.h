@@ -16,11 +16,12 @@
 #ifndef TILDA_WINDOW_H
 #define TILDA_WINDOW_H
 
-#include "tilda_window.h"
 #include "tilda_terminal.h"
 
 #include <glib.h>
 #include <gtk/gtk.h>
+
+#include "tilda-search-box.h"
 
 G_BEGIN_DECLS
 
@@ -31,7 +32,6 @@ enum pull_action {
 };
 
 typedef struct tilda_window_ tilda_window;
-typedef struct tilda_search_ tilda_search;
 
 enum tilda_animation_state {
     STATE_UP,
@@ -44,6 +44,7 @@ struct tilda_window_
 {
     GtkWidget *window;
     GtkWidget *notebook;
+    GtkWidget *search;
 
     GList *terms;
     GtkAccelGroup * accel_group;
@@ -84,24 +85,17 @@ struct tilda_window_
     gint unscaled_font_size;
     gdouble current_scale_factor;
 
-    tilda_search *search;
-
     enum pull_action last_action;
     gint64 last_action_time;
+
+    /**
+     * This stores the ID of the event source which handles size updates.
+     */
+    guint size_update_event_source;
 };
 
-struct tilda_search_
-{
-    GtkWidget *search_box;
-    GtkWidget *entry_search;
-    GtkWidget *button_next;
-    GtkWidget *button_prev;
-    GtkWidget *check_match_case;
-    GtkWidget *check_regex;
-    GtkWidget *label_search_end;
-    /* Stores the result of the last search, if FALSE the last search did not find a match. */
-    gboolean is_search_result;
-};
+/* For use in get_display_dimension() */
+enum dimensions { HEIGHT, WIDTH };
 
 enum notebook_tab_positions { NB_TOP, NB_BOTTOM, NB_LEFT, NB_RIGHT, NB_HIDDEN };
 
@@ -164,6 +158,11 @@ gboolean tilda_window_init (const gchar *config_file, const gint instance, tilda
 gint tilda_window_free (tilda_window *tw);
 
 /**
+ * Applies or reapplies the current fullscreen state of the tilda window.
+ */
+void tilda_window_set_fullscreen(tilda_window *tw);
+
+/**
  * This toggles the fullscreen mode on or off. This is intended to be registered
  * as a GCallback in order to be invoked after some user action.
  */
@@ -198,12 +197,29 @@ void tilda_window_refresh_transparency(tilda_window *tw);
 /**
  * Toggles the search bar of the tilda window.
  */
-gint tilda_window_toggle_searchbar (tilda_window *tw);
+void tilda_window_toggle_searchbar (tilda_window *tw);
 
 /**
  * Show confirm dialog before quitting (if enabled)
  */
 gint tilda_window_confirm_quit (tilda_window *tw);
+
+GdkMonitor* tilda_window_find_monitor_number(tilda_window *tw);
+
+/**
+ * Finds the coordinate that will center the tilda window in the screen.
+ *
+ * If you want to center the tilda window on the top or bottom of the screen,
+ * pass the screen width into screen_dimension and the tilda window's width
+ * into the tilda_dimension variable. The result will be the x coordinate that
+ * should be used in order to have the tilda window centered on the screen.
+ *
+ * Centering based on y coordinate is similar, just use the screen height and
+ * tilda window height.
+ */
+gint tilda_window_find_centering_coordinate (tilda_window *tw, enum dimensions dimension);
+
+void tilda_window_update_window_position (tilda_window *tw);
 
 #define TILDA_WINDOW(data) ((tilda_window *)(data))
 

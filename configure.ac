@@ -12,14 +12,14 @@ m4_define ([tilda_repository],
 AC_PREREQ([2.68])
 
 AC_INIT([Tilda],
-        [1.4~alpha],
+        [1.6-alpha],
         [tilda_issues],
         [tilda],
         [tilda_repository])
 
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_SRCDIR([src/tilda.c])
-AC_CONFIG_HEADERS([tilda-config.h:tilda-config.h.in])
+AC_CONFIG_HEADERS([config.h])
 
 AM_INIT_AUTOMAKE([foreign subdir-objects])
 
@@ -69,7 +69,6 @@ if test "x$enable_maintainer_flags" = "xyes"; then
             -Werror=init-self \
             -Werror=vla \
             -Wno-unused-parameter \
-            -DDEBUG \
            "
 fi
 
@@ -128,21 +127,12 @@ if test "x$enable_lto" = "xyes"; then
     LDFLAGS="$LDFLAGS $CFLAGS -fuse-linker-plugin"
 fi
 
-AC_ARG_ENABLE([vte-2.91],
-		[AS_HELP_STRING([--enable-vte-2.91],
-						[compile with libvte2.91 [default=yes]])],
-		[enable_vte_291=$enableval],
-		[enable_vte_291=yes])
-        
-if test "x$enable_vte_291" = "xyes"; then
-    vte_package="vte-2.91"
-    AC_DEFINE([VTE_291], [1], [VTE Version])
-else
-    vte_package="vte-2.90"
-    AC_DEFINE([VTE_290], [1], [VTE Version])
-fi
 
-AM_CONDITIONAL([VTE_290], [test "x$enable_vte_291" = "xno"])
+
+AC_PATH_PROG(GLIB_MKENUMS, glib-mkenums, no)
+if test x$GLIB_MKENUMS = xno; then
+  AC_MSG_ERROR(Could not find a glib-mkenums in your PATH)
+fi
 
 AC_PATH_PROG(GLIB_COMPILE_RESOURCES, glib-compile-resources, no)
 if test x$GLIB_COMPILE_RESOURCES = xno; then
@@ -160,7 +150,7 @@ AM_GNU_GETTEXT([external])
 # Checks for libraries.
 PKG_PROG_PKG_CONFIG
 PKG_CHECK_MODULES([GTK], [gtk+-3.0 >= 3.10.0])
-PKG_CHECK_MODULES([VTE], [$vte_package]) 
+PKG_CHECK_MODULES([VTE], [vte-2.91 >= 0.40])
 PKG_CHECK_MODULES([LIBCONFUSE], [libconfuse])
 PKG_CHECK_MODULES([X11], [x11])
 

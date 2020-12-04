@@ -17,11 +17,10 @@
 #define _POSIX_SOURCE /* feature test macro for fileno */
 #define _XOPEN_SOURCE /* feature test macro for fsync */
 
-#include <tilda-config.h>
+#include "config.h"
 #include "debug.h"
 
 #include <confuse.h>
-#include <glib.h>
 #include <glib/gi18n.h>
 #include <stdio.h>
 #include <stdlib.h> /* atoi */
@@ -68,7 +67,7 @@ static cfg_opt_t config_opts[] = {
     CFG_STR("title", "Tilda", CFGF_NONE),
     CFG_STR("background_color", "white", CFGF_NONE),
     CFG_STR("working_dir", NULL, CFGF_NONE),
-    CFG_STR("web_browser", "x-www-browser", CFGF_NONE),
+    CFG_STR("web_browser", "xdg-open", CFGF_NONE),
     CFG_STR("increase_font_size_key", "<Control>equal", CFGF_NONE),
     CFG_STR("decrease_font_size_key", "<Control>minus", CFGF_NONE),
     CFG_STR("normalize_font_size_key", "<Control>0", CFGF_NONE),
@@ -77,10 +76,6 @@ static cfg_opt_t config_opts[] = {
 
     /* ints */
     CFG_INT("lines", 5000, CFGF_NONE),
-    CFG_INT("max_width", 600, CFGF_NONE),
-    CFG_INT("max_height", 150, CFGF_NONE),
-    CFG_INT("min_width", 1, CFGF_NONE),
-    CFG_INT("min_height", 1, CFGF_NONE),
     CFG_INT("x_pos", 0, CFGF_NONE),
     CFG_INT("y_pos", 0, CFGF_NONE),
     CFG_INT("tab_pos", 0, CFGF_NONE),
@@ -90,21 +85,18 @@ static cfg_opt_t config_opts[] = {
     CFG_INT("delete_key", 1, CFGF_NONE),
     CFG_INT("d_set_title", 3, CFGF_NONE),
     CFG_INT("command_exit", 2, CFGF_NONE),
+    /* Timeout in milliseconds to spawn a shell or command */
+    CFG_INT("command_timeout_ms", 3000, CFGF_NONE),
     CFG_INT("scheme", 3, CFGF_NONE),
     CFG_INT("slide_sleep_usec", 20000, CFGF_NONE),
     CFG_INT("animation_orientation", 0, CFGF_NONE),
     CFG_INT("timer_resolution", 200, CFGF_NONE),
     CFG_INT("auto_hide_time", 2000, CFGF_NONE),
     CFG_INT("on_last_terminal_exit", 0, CFGF_NONE),
-    CFG_BOOL("prompt_on_exit", FALSE, CFGF_NONE),
-    CFG_INT("palette_scheme", 0, CFGF_NONE),
+    CFG_BOOL("prompt_on_exit", TRUE, CFGF_NONE),
+    CFG_INT("palette_scheme", 1, CFGF_NONE),
     CFG_INT("non_focus_pull_up_behaviour", 0, CFGF_NONE),
     CFG_INT("cursor_shape", 0, CFGF_NONE),
-
-    /* Deprecated tilda options */
-    CFG_INT("show_on_monitor_number", 0, CFGF_NODEFAULT),
-    CFG_BOOL("title_max_length_flag", FALSE, CFGF_NODEFAULT),
-    /* End deprecated tilda options */
 
     /* The length of a tab title */
     CFG_INT("title_max_length", 25, CFGF_NONE),
@@ -141,16 +133,21 @@ static cfg_opt_t config_opts[] = {
     CFG_INT("cursor_green", 0xffff, CFGF_NONE),
     CFG_INT("cursor_blue", 0xffff, CFGF_NONE),
 
+    /* floats, libconfuse has a bug with floats on non english systems,
+     * see: https://github.com/martinh/libconfuse/issues/119, so we
+     * need to emulate floats by scaling values to  a long value. */
+    CFG_INT ("width_percentage", G_MAXINT, CFGF_NONE),
+    CFG_INT ("height_percentage", G_MAXINT, CFGF_NONE),
+
     /* booleans */
     CFG_BOOL("scroll_history_infinite", FALSE, CFGF_NONE),
     CFG_BOOL("scroll_on_output", FALSE, CFGF_NONE),
     CFG_BOOL("notebook_border", FALSE, CFGF_NONE),
-    CFG_BOOL("antialias", TRUE, CFGF_NONE),
+
     CFG_BOOL("scrollbar", FALSE, CFGF_NONE),
     CFG_BOOL("grab_focus", TRUE, CFGF_NONE),
     CFG_BOOL("above", TRUE, CFGF_NONE),
     CFG_BOOL("notaskbar", TRUE, CFGF_NONE),
-    CFG_BOOL("bold", TRUE, CFGF_NONE),
     CFG_BOOL("blinks", TRUE, CFGF_NONE),
     CFG_BOOL("scroll_on_key", TRUE, CFGF_NONE),
     CFG_BOOL("bell", FALSE, CFGF_NONE),
@@ -162,7 +159,6 @@ static cfg_opt_t config_opts[] = {
     CFG_BOOL("centered_horizontally", FALSE, CFGF_NONE),
     CFG_BOOL("centered_vertically", FALSE, CFGF_NONE),
     CFG_BOOL("enable_transparency", FALSE, CFGF_NONE),
-    CFG_BOOL("double_buffer", FALSE, CFGF_NODEFAULT),
     CFG_BOOL("auto_hide_on_focus_lost", FALSE, CFGF_NONE),
     CFG_BOOL("auto_hide_on_mouse_leave", FALSE, CFGF_NONE),
     /* Whether and how we limit the length of a tab title */
@@ -172,29 +168,49 @@ static cfg_opt_t config_opts[] = {
     CFG_BOOL("command_login_shell", FALSE, CFGF_NONE),
     CFG_BOOL("start_fullscreen", FALSE, CFGF_NONE),
     /* Whether closing a tab shows a confirmation dialog. */
-    CFG_BOOL("confirm_close_tab", FALSE, CFGF_NONE),
+    CFG_BOOL("confirm_close_tab", TRUE, CFGF_NONE),
 
-    /* Config settings for VTE-2.90 features */
+    CFG_INT("back_alpha", 0xffff, CFGF_NONE),
+
+    /* Whether to show the full tab title as a tooltip */
+    CFG_BOOL("show_title_tooltip", FALSE, CFGF_NONE),
+
+    /**
+     * Deprecated tilda options. These options be commented out in the
+     * configuration file and will not be initialized with default values
+     * if the option is missing in the config file.
+     **/
+    CFG_INT("max_width", 0, CFGF_NODEFAULT),
+    CFG_INT("max_height", 0, CFGF_NODEFAULT),
+
     CFG_STR("image", NULL, CFGF_NODEFAULT),
-    //Even when CFGF_NODEFAULT flag is passed libconfuse won't let us pass a NULL value to a bool
+
+    CFG_INT("show_on_monitor_number", 0, CFGF_NODEFAULT),
+    CFG_INT("transparency", 0, CFGF_NODEFAULT),
+
+    CFG_BOOL("bold", TRUE, CFGF_NODEFAULT),
+    CFG_BOOL("title_max_length_flag", FALSE, CFGF_NODEFAULT),
+    CFG_BOOL("antialias", TRUE, CFGF_NODEFAULT),
+    CFG_BOOL("double_buffer", FALSE, CFGF_NODEFAULT),
     CFG_BOOL("scroll_background", FALSE, CFGF_NODEFAULT),
     CFG_BOOL("use_image", FALSE, CFGF_NODEFAULT),
-    CFG_INT("transparency", 0, CFGF_NONE),
-#if VTE_MINOR_VERSION >= 38 /* VTE-2.91 */
-    CFG_INT("back_alpha", 0xffff, CFGF_NONE),
-#endif
+
+    CFG_INT("min_width", 0, CFGF_NODEFAULT),
+    CFG_INT("min_height", 0, CFGF_NODEFAULT),
+    /* End deprecated tilda options */
+
     CFG_END()
 };
 
 /* Define these here, so that we can enable a non-threadsafe version
  * without changing the code below. */
 #ifndef NO_THREADSAFE
-	static GMutex mutex;
-	#define config_mutex_lock() g_mutex_lock (&mutex)
-	#define config_mutex_unlock() g_mutex_unlock (&mutex)
+    static GMutex mutex;
+    #define config_mutex_lock() g_mutex_lock (&mutex)
+    #define config_mutex_unlock() g_mutex_unlock (&mutex)
 #else
-	#define config_mutex_lock()
-	#define config_mutex_unlock()
+    #define config_mutex_lock()
+    #define config_mutex_unlock()
 #endif
 
 #define CONFIG1_OLDER -1
@@ -203,137 +219,140 @@ static cfg_opt_t config_opts[] = {
 
 static gboolean compare_config_versions (const gchar *config1, const gchar *config2) G_GNUC_UNUSED;
 
-void remove_deprecated_config_options(const gchar *const *deprecated_config_options, guint size);
+static void invoke_deprecation_function(const gchar *const *deprecated_config_options,
+                                        guint size);
+
+static void remove_deprecated_config_options(const gchar *const *deprecated_config_options, guint size);
 
 /* Note: set config_file to NULL to just free the
  * data structures, and not write out the state to
  * a file. */
 gint config_free (const gchar *config_file)
 {
-	gint ret = 0;
+    gint ret = 0;
 
-	if (config_file != NULL)
-		ret = config_write (config_file);
+    if (config_file != NULL)
+        ret = config_write (config_file);
 
-	cfg_free (tc);
+    cfg_free (tc);
 
-	return ret;
+    return ret;
 }
 
-gint config_setint (const gchar *key, const gint val)
+gint config_setint (const gchar *key, const glong val)
 {
-	config_mutex_lock ();
-	cfg_setint (tc, key, val);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    cfg_setint (tc, key, val);
+    config_mutex_unlock ();
 
-	return 0;
+    return 0;
 }
 
-gint config_setnint(const gchar *key, const gint val, const guint idx)
+gint config_setnint(const gchar *key, const glong val, const guint idx)
 {
-	config_mutex_lock ();
-	cfg_setnint (tc, key, val, idx);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    cfg_setnint (tc, key, val, idx);
+    config_mutex_unlock ();
 
-	return 0;
+    return 0;
 }
 
 gint config_setdouble (const gchar *key, const gdouble val) {
-	config_mutex_lock ();
-	cfg_setfloat (tc, key, val);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    cfg_setfloat (tc, key, val);
+    config_mutex_unlock ();
 
-	return 0;
+    return 0;
 }
 
 gint config_setndouble (const gchar *key, const gdouble val, const guint idx) {
-	config_mutex_lock ();
-	cfg_setnfloat (tc, key, val, idx);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    cfg_setnfloat (tc, key, val, idx);
+    config_mutex_unlock ();
 
-	return 0;
+    return 0;
 }
 
 gint config_setstr (const gchar *key, const gchar *val)
 {
-	config_mutex_lock ();
-	cfg_setstr (tc, key, val);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    cfg_setstr (tc, key, val);
+    config_mutex_unlock ();
 
-	return 0;
+    return 0;
 }
 
 gint config_setbool(const gchar *key, const gboolean val)
 {
-	config_mutex_lock ();
-	cfg_setbool (tc, key, val);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    cfg_setbool (tc, key, val);
+    config_mutex_unlock ();
 
-	return 0;
+    return 0;
 }
 
-gint config_getint (const gchar *key)
+glong config_getint (const gchar *key)
 {
-	gint temp;
+    glong temp;
 
-	config_mutex_lock ();
-	temp = cfg_getint (tc, key);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    temp = cfg_getint (tc, key);
+    config_mutex_unlock ();
 
-	return temp;
+    return temp;
 }
 
 glong config_getnint(const gchar *key, const guint idx)
 {
-	glong temp;
+    glong temp;
 
-	config_mutex_lock ();
-	temp = cfg_getnint (tc, key, idx);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    temp = cfg_getnint (tc, key, idx);
+    config_mutex_unlock ();
 
-	return temp;
+    return temp;
 }
 
 gdouble config_getdouble (const gchar* key) {
-	gdouble temp;
+    gdouble temp;
 
-	config_mutex_lock ();
-	temp = cfg_getfloat (tc, key);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    temp = cfg_getfloat (tc, key);
+    config_mutex_unlock ();
 
-	return temp;
+    return temp;
 }
 
 gdouble config_getndouble (const gchar* key, const guint idx) {
-	gdouble temp;
+    gdouble temp;
 
-	config_mutex_lock ();
-	temp = cfg_getnfloat (tc, key, idx);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    temp = cfg_getnfloat (tc, key, idx);
+    config_mutex_unlock ();
 
-	return temp;
+    return temp;
 }
 
 gchar* config_getstr (const gchar *key)
 {
-	gchar *temp;
+    gchar *temp;
 
-	config_mutex_lock ();
-	temp = cfg_getstr (tc, key);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    temp = cfg_getstr (tc, key);
+    config_mutex_unlock ();
 
-	return temp;
+    return temp;
 }
 
 gboolean config_getbool(const gchar *key)
 {
-	gboolean temp;
+    gboolean temp;
 
-	config_mutex_lock ();
-	temp = cfg_getbool (tc, key);
-	config_mutex_unlock ();
+    config_mutex_lock ();
+    temp = cfg_getbool (tc, key);
+    config_mutex_unlock ();
 
-	return temp;
+    return temp;
 }
 
 /* This will write out the current state of the config file to the disk.
@@ -399,53 +418,148 @@ gint config_write (const gchar *config_file)
  */
 gint config_init (const gchar *config_file)
 {
-	gint ret = 0;
+    DEBUG_FUNCTION ("config_init");
+
+    gint ret = 0;
 
     // Can we use a more descriptive name than tc?
-	tc = cfg_init (config_opts, 0);
+    tc = cfg_init (config_opts, 0);
 
-	if (g_file_test (config_file,
+    if (g_file_test (config_file,
         G_FILE_TEST_IS_REGULAR))
     {
-		/* Read in the existing configuration options */
-		ret = cfg_parse (tc, config_file);
+        /* Read in the existing configuration options */
+        ret = cfg_parse (tc, config_file);
 
-		if (ret == CFG_PARSE_ERROR) {
-			DEBUG_ERROR ("Problem parsing config");
+        if (ret == CFG_PARSE_ERROR) {
+            DEBUG_ERROR ("Problem parsing config");
             return ret;
-		} else if (ret != CFG_SUCCESS) {
+        } else if (ret != CFG_SUCCESS) {
             DEBUG_ERROR ("Problem parsing config.");
             return ret;
         }
-	}
+    }
 
-    /* Deprecate old config settings
-     * This is a lame work around until we get a permenant solution to
-     * libconfuse lacking for this functionality
-     */
-    const gchar *deprecated_tilda_config_options[] = {"show_on_monitor_number","title_max_length_flag","double_buffer"};
-    remove_deprecated_config_options(deprecated_tilda_config_options, G_N_ELEMENTS(deprecated_tilda_config_options));
-
-#if VTE_MINOR_VERSION >= 40
-    /* Deprecate old config settings
+    /* Deprecate old config settings.
      * This is a lame work around until we get a permanent solution to
      * libconfuse lacking for this functionality
      */
-    const gchar *deprecated_vte_config_options[] = {"image", "scroll_background", "use_image"};
-    remove_deprecated_config_options (deprecated_vte_config_options, G_N_ELEMENTS(deprecated_vte_config_options));
-#else
-    if (cfg_getopt(tc, "use_image")->nvalues < 1) {
-        cfg_setbool(tc, "use_image", FALSE);
-    }
-    if (cfg_getopt(tc, "scroll_background")->nvalues < 1) {
-        cfg_setbool(tc, "scroll_background", TRUE);
-    }
-#endif
+    const gchar *deprecated_tilda_config_options[] = {"show_on_monitor_number",
+                                                      "bold",
+                                                      "title_max_length_flag",
+                                                      "double_buffer",
+                                                      "antialias",
+                                                      "image",
+                                                      "transparency",
+                                                      "scroll_background",
+                                                      "use_image",
+                                                      "min_width",
+                                                      "min_height",
+                                                      "max_width",
+                                                      "max_height"
+    };
+
+    invoke_deprecation_function (deprecated_tilda_config_options,
+                                 G_N_ELEMENTS(deprecated_tilda_config_options));
+
+    remove_deprecated_config_options(deprecated_tilda_config_options,
+                                     G_N_ELEMENTS(deprecated_tilda_config_options));
+
     #ifndef NO_THREADSAFE
         g_mutex_init(&mutex);
     #endif
 
-	return ret;
+    return ret;
+}
+
+static GdkMonitor *config_get_configured_monitor ()
+{
+    gint x_pos = (gint) config_getint ("x_pos");
+    gint y_pos = (gint) config_getint ("y_pos");
+
+    GdkDisplay *display = gdk_display_get_default ();
+
+    return gdk_display_get_monitor_at_point (display,
+                                             x_pos,
+                                             y_pos);
+}
+
+void config_get_configured_window_size (GdkRectangle *rectangle)
+{
+    gdouble relative_width = GLONG_TO_DOUBLE (config_getint ("width_percentage"));
+    gdouble relative_height = GLONG_TO_DOUBLE (config_getint ("height_percentage"));
+
+    GdkMonitor *monitor = config_get_configured_monitor ();
+
+    GdkRectangle workarea;
+    gdk_monitor_get_workarea (monitor, &workarea);
+
+    rectangle->width = pixels_ratio_to_absolute (relative_width, workarea.width);
+    rectangle->height = pixels_ratio_to_absolute (relative_height, workarea.height);
+}
+
+static void config_get_configured_percentage (gdouble *width_percentage,
+                                              gdouble *height_percentage)
+{
+    glong windowWidth = config_getint ("max_width");
+    glong windowHeight = config_getint ("max_height");
+
+    GdkMonitor *monitor = config_get_configured_monitor ();
+
+    GdkRectangle workarea;
+    gdk_monitor_get_workarea (monitor, &workarea);
+
+    if (width_percentage) {
+        *width_percentage = pixels_absolute_to_ratio (workarea.width, windowWidth);
+    }
+
+    if (height_percentage) {
+        *height_percentage = pixels_absolute_to_ratio (workarea.height, windowHeight);
+    }
+}
+
+static void print_migration_info (const gchar *old_option_name,
+                                  const gchar *new_option_name)
+{
+    g_print ("Migrated deprecated value in option '%s' to '%s'.\n",
+             old_option_name, new_option_name);
+}
+
+void invoke_deprecation_function (const gchar *const *deprecated_config_options,
+                                  guint size)
+{
+    for (guint i = 0; i < size; i++)
+    {
+        const char *const option_name = deprecated_config_options[i];
+
+        /* This will still return the option even if its
+         * commented out in the config file, so we perform the extra check
+         * using `cfg_opt_size` below to determine if the option has a valid
+         * value. We do this to ensure that we only execute the migration
+         * code once. */
+        cfg_opt_t *option = cfg_getopt (tc, option_name);
+
+        if (option == NULL || cfg_opt_size (option) == 0) {
+            continue;
+        }
+
+        gdouble width_percentage;
+        gdouble height_percentage;
+
+        config_get_configured_percentage (&width_percentage,
+                                          &height_percentage);
+
+        if (strncmp(option_name, "max_width", sizeof("max_width")) == 0)
+        {
+            print_migration_info (option_name, "width_percentage");
+            config_setint ("width_percentage", GLONG_FROM_DOUBLE (width_percentage));
+        }
+        if (strncmp(option_name, "max_height", sizeof("max_height")) == 0)
+        {
+            print_migration_info (option_name, "height_percentage");
+            config_setint ("height_percentage", GLONG_FROM_DOUBLE (height_percentage));
+        }
+    }
 }
 
 void remove_deprecated_config_options(const gchar *const *deprecated_config_options, guint size) {
@@ -453,7 +567,7 @@ void remove_deprecated_config_options(const gchar *const *deprecated_config_opti
     for (guint i =0; i < size; i++) {
         opt = cfg_getopt(tc, deprecated_config_options[i]);
         if (opt->nvalues != 0) {
-            g_warning("Warning: %s is no longer a valid config option for the current version of Tilda.\n", deprecated_config_options[i]);
+            g_info("'%s' is no longer a valid config option in the current version of Tilda and has been removed from the config file.", deprecated_config_options[i]);
             cfg_free_value(opt);
         }
     }

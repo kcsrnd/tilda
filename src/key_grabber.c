@@ -16,12 +16,12 @@
 
 /* Some stolen from yeahconsole -- loving that open source :) */
 
-#include <tilda-config.h>
+#include "config.h"
 
 #include "debug.h"
 #include "key_grabber.h"
+#include "screen-size.h"
 #include "tilda.h"
-#include "xerror.h"
 #include <glib.h>
 #include <glib/gi18n.h>
 #include "configsys.h"
@@ -81,10 +81,15 @@ void generate_animation_positions (struct tilda_window_ *tw)
     gint i;
     gint last_pos_x = config_getint ("x_pos");
     gint last_pos_y = config_getint ("y_pos");
-    gint last_width = config_getint ("max_width");
-    gint last_height = config_getint ("max_height");
-    gint screen_width = gdk_screen_width();
-    gint screen_height = gdk_screen_height();
+
+    GdkRectangle rectangle;
+    config_get_configured_window_size (&rectangle);
+
+    gint last_width = rectangle.width;
+    gint last_height = rectangle.height;
+    gint screen_width;
+    gint screen_height;
+    screen_size_get_dimensions (&screen_width, &screen_height);
 
     for (i=0; i<32; i++)
     {
@@ -177,7 +182,9 @@ void tilda_window_set_active (tilda_window *tw)
         event.xclient.data.l[3] = 0;
         event.xclient.data.l[4] = 0;
 
+        gdk_x11_display_error_trap_push(gdk_display_get_default());
         XSendEvent (x11_display, x11_root_window, False, mask, &event);
+        gdk_x11_display_error_trap_pop_ignored(gdk_display_get_default());
     }
     else
     {
@@ -185,20 +192,24 @@ void tilda_window_set_active (tilda_window *tw)
          * try this, though it probably won't work... */
         g_printerr (_("WARNING: Window manager (%s) does not support EWMH hints\n"),
                     gdk_x11_screen_get_window_manager_name (screen));
+        gdk_x11_display_error_trap_push(gdk_display_get_default());
         XRaiseWindow (x11_display, x11_window);
+        gdk_x11_display_error_trap_pop_ignored(gdk_display_get_default());
     }
 }
 
 /* Process all pending GTK events, without returning to the GTK mainloop */
 static void process_all_pending_gtk_events ()
 {
+    GdkDisplay *display = gdk_display_get_default ();
+
     while (gtk_events_pending ())
         gtk_main_iteration ();
 
     /* This is not strictly necessary, but I think it makes the animation
      * look a little smoother. However, it probably does increase the load
      * on the X server. */
-    gdk_flush ();
+    gdk_display_flush (display);
 }
 
 /**
@@ -216,8 +227,7 @@ void pull (struct tilda_window_ *tw, enum pull_action action, gboolean force_hid
             && !force_hide
             && !tw->hide_non_focused;
 
-    if (action == PULL_TOGGLE && tw->last_action == PULL_UP
-        && g_get_monotonic_time() - tw->last_action_time < 150 * G_TIME_SPAN_MILLISECOND) {
+    if (g_get_monotonic_time() - tw->last_action_time < 150 * G_TIME_SPAN_MILLISECOND) {
         /* this is to prevent crazy toggling, with 150ms prevention time */
         return;
     }
@@ -247,6 +257,14 @@ void pull (struct tilda_window_ *tw, enum pull_action action, gboolean force_hid
 static void pull_up (struct tilda_window_ *tw) {
     tw->current_state = STATE_GOING_UP;
 
+    gdk_x11_window_set_user_time (gtk_widget_get_window (tw->window),
+                                  tomboy_keybinder_get_current_event_time());
+
+    if (tw->fullscreen)
+    {
+        gtk_window_unfullscreen (GTK_WINDOW(tw->window));
+    }
+
     if (config_getbool ("animation") && !tw->fullscreen) {
         GdkWindow *x11window;
         GdkDisplay *display;
@@ -255,10 +273,14 @@ static void pull_up (struct tilda_window_ *tw) {
             x11window = gtk_widget_get_window (tw->window);
             display = gdk_window_get_display (x11window);
             atom = gdk_x11_get_xatom_by_name_for_display (display, "_NET_WM_WINDOW_TYPE_DOCK");
+
+            gdk_x11_display_error_trap_push(gdk_display_get_default());
             XChangeProperty (GDK_DISPLAY_XDISPLAY (display), GDK_WINDOW_XID (x11window),
                              gdk_x11_get_xatom_by_name_for_display (display, "_NET_WM_WINDOW_TYPE"),
                              XA_ATOM, 32, PropModeReplace,
                              (guchar *) &atom, 1);
+            gdk_x11_display_error_trap_pop_ignored(gdk_display_get_default());
+
             process_all_pending_gtk_events ();
         }
         gint slide_sleep_usec = config_getint ("slide_sleep_usec");
@@ -279,10 +301,13 @@ static void pull_up (struct tilda_window_ *tw) {
             } else {
                 atom = gdk_x11_get_xatom_by_name_for_display (display, "_NET_WM_WINDOW_TYPE_NORMAL");
             }
+
+            gdk_x11_display_error_trap_push(gdk_display_get_default());
             XChangeProperty (GDK_DISPLAY_XDISPLAY (display), GDK_WINDOW_XID (x11window),
                              gdk_x11_get_xatom_by_name_for_display (display, "_NET_WM_WINDOW_TYPE"),
                              XA_ATOM, 32, PropModeReplace,
                              (guchar *) &atom, 1);
+            gdk_x11_display_error_trap_pop_ignored(gdk_display_get_default());
         }
     }
 
@@ -332,11 +357,14 @@ static void pull_down (struct tilda_window_ *tw) {
             x11window = gtk_widget_get_window (tw->window);
             display = gdk_window_get_display (x11window);
             atom = gdk_x11_get_xatom_by_name_for_display (display, "_NET_WM_WINDOW_TYPE_DOCK");
+            gdk_x11_display_error_trap_push(gdk_display_get_default());
+
             XChangeProperty (GDK_DISPLAY_XDISPLAY (display), GDK_WINDOW_XID (x11window),
                              gdk_x11_get_xatom_by_name_for_display (display, "_NET_WM_WINDOW_TYPE"),
                              XA_ATOM, 32, PropModeReplace,
                              (guchar *) &atom, 1);
             process_all_pending_gtk_events ();
+            gdk_x11_display_error_trap_pop_ignored(gdk_display_get_default());
         }
         gint slide_sleep_usec = config_getint ("slide_sleep_usec");
         for (guint i=0; i<32; i++) {
@@ -356,10 +384,13 @@ static void pull_down (struct tilda_window_ *tw) {
             } else {
                 atom = gdk_x11_get_xatom_by_name_for_display (display, "_NET_WM_WINDOW_TYPE_NORMAL");
             }
+
+            gdk_x11_display_error_trap_push(gdk_display_get_default());
             XChangeProperty (GDK_DISPLAY_XDISPLAY (display), GDK_WINDOW_XID (x11window),
                              gdk_x11_get_xatom_by_name_for_display (display, "_NET_WM_WINDOW_TYPE"),
                              XA_ATOM, 32, PropModeReplace,
                              (guchar *) &atom, 1);
+            gdk_x11_display_error_trap_pop_ignored(gdk_display_get_default());
         }
     } else {
         gtk_window_move (GTK_WINDOW(tw->window), config_getint ("x_pos"), config_getint ("y_pos"));
@@ -369,6 +400,11 @@ static void pull_down (struct tilda_window_ *tw) {
      * focus stealing prevention to make the old _NET_WM_USER_TIME hack
      * not work anymore. This is working for now... */
     tilda_window_set_active (tw);
+
+    if (tw->fullscreen)
+    {
+        gtk_window_fullscreen (GTK_WINDOW(tw->window));
+    }
 
     g_debug ("pull_down(): MOVED DOWN");
     tw->current_state = STATE_DOWN;

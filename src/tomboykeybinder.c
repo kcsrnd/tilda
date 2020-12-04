@@ -56,7 +56,7 @@ typedef struct _Binding {
 } Binding;
 
 static GSList   *bindings        = NULL;
-static guint32  last_event_time  = 0;
+static Time  last_event_time  = 0;
 static gboolean processing_event = FALSE;
 
 /**
@@ -129,6 +129,7 @@ grab_ungrab_with_ignorable_modifiers (GdkWindow *rootwin,
 
     for (i = 0; i < G_N_ELEMENTS (mod_masks); i++) {
         if (grab) {
+            gdk_x11_display_error_trap_push(gdk_display_get_default());
             XGrabKey (GDK_WINDOW_XDISPLAY (rootwin),
                       binding->keycode,
                       binding->modifiers | mod_masks[i],
@@ -136,11 +137,14 @@ grab_ungrab_with_ignorable_modifiers (GdkWindow *rootwin,
                       False,
                       GrabModeAsync,
                       GrabModeAsync);
+            gdk_x11_display_error_trap_pop_ignored(gdk_display_get_default());
         } else {
+            gdk_x11_display_error_trap_push(gdk_display_get_default());
             XUngrabKey (GDK_WINDOW_XDISPLAY (rootwin),
                         binding->keycode,
                         binding->modifiers | mod_masks[i],
                         GDK_WINDOW_XID (rootwin));
+            gdk_x11_display_error_trap_pop_ignored(gdk_display_get_default());
         }
     }
 }
@@ -148,7 +152,8 @@ grab_ungrab_with_ignorable_modifiers (GdkWindow *rootwin,
 static gboolean
 do_grab_key (Binding *binding)
 {
-    GdkKeymap *keymap  = gdk_keymap_get_default ();
+    GdkDisplay *display = gdk_display_get_default ();
+    GdkKeymap *keymap  = gdk_keymap_get_for_display (display);
     GdkWindow *rootwin = gdk_get_default_root_window ();
 
     GdkModifierType virtual_mods = (GdkModifierType) 0;
@@ -178,15 +183,15 @@ do_grab_key (Binding *binding)
     // mask out virtual modifiers so we get only the real modifiers
     binding->modifiers = mapped_modifiers & REAL_MODIFIER_MASK;
 
-    gdk_error_trap_push ();
+    gdk_x11_display_error_trap_push (display);
 
     grab_ungrab_with_ignorable_modifiers (rootwin,
                                           binding,
                                           TRUE /* grab */);
 
-    gdk_flush ();
+    gdk_display_flush (display);
 
-    if (gdk_error_trap_pop ()) {
+    if (gdk_x11_display_error_trap_pop (display)) {
         g_warning ("Binding '%s' failed!\n", binding->keystring);
         return FALSE;
     }
@@ -242,9 +247,9 @@ filter_func (GdkXEvent *gdk_xevent, G_GNUC_UNUSED GdkEvent *event,
              * windows to avoid anti-focus-stealing code.
              */
             processing_event = TRUE;
-            last_event_time  = (guint32) xevent->xkey.time;
+            last_event_time  = xevent->xkey.time;
 
-            g_debug ("Current event time %d", last_event_time);
+            g_debug ("Current event time %ld", last_event_time);
 
             event_mods = xevent->xkey.state & ~(num_lock_mask |
                                                 caps_lock_mask |
@@ -313,7 +318,8 @@ keymap_changed (GdkKeymap *map)
 void
 tomboy_keybinder_init (void)
 {
-    GdkKeymap *keymap  = gdk_keymap_get_default ();
+    GdkDisplay *display = gdk_display_get_default ();
+    GdkKeymap *keymap  = gdk_keymap_get_for_display (display);
     GdkWindow *rootwin = gdk_get_default_root_window ();
 
     lookup_ignorable_modifiers (keymap);
@@ -380,7 +386,7 @@ tomboy_keybinder_unbind (const char *keystring,
     }
 }
 
-guint32
+Time
 tomboy_keybinder_get_current_event_time (void)
 {
     if (processing_event)

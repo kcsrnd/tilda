@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE
 /*
  * This is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Library General Public License as published by
@@ -31,12 +32,12 @@
  * file except a parse error.
  */
 #define TILDA_CONFIG_OTHER_ERROR \
-    "<b>An unexpected error occured while parsing the config file.</b>\n\n" \
+    "<b>An unexpected error occurred while parsing the config file.</b>\n\n" \
     "The default configuration will be used instead. This error can occur if the configuration file is corrupted" \
     "or otherwise unreadable. Tilda will now start with a default configuration."
 
 
-#include <tilda-config.h>
+#include "config.h"
 
 #include "debug.h"
 #include "tilda.h"
@@ -44,9 +45,9 @@
 #include "tilda_window.h"
 #include "key_grabber.h" /* for pull */
 #include "wizard.h"
-#include "xerror.h"
 #include "tomboykeybinder.h"
 #include "tilda-keybinding.h"
+#include "tilda-cli-options.h"
 
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -268,6 +269,12 @@ static gint remove_stale_lock_files ()
     gchar *filename;
     GDir *dir;
 
+    /* if the lock dir does not exist then there are no stale lock files to remove. */
+    if (!g_file_test (lock_dir, G_FILE_TEST_EXISTS)) {
+        g_free (lock_dir);
+        return 0;
+    }
+
     /* Open the lock directory for reading */
     dir = g_dir_open (lock_dir, 0, NULL);
 
@@ -304,122 +311,6 @@ static gint remove_stale_lock_files ()
 }
 
 /**
- * Parse all of the Command-Line Options given to tilda.
- * This can modify argv and argc, and will set values in the config.
- *
- * @param cli_options pointer to a struct to store command-line options into
- * @param argc argc from main
- * @param argv argv from main
- * @param config_file pointer to config file path if specified via command-line
- * @return TRUE if we should show the configuration wizard, FALSE otherwise
- */
-static gboolean parse_cli (int argc, char *argv[], tilda_cli_options *cli_options, gchar **config_file)
-{
-    DEBUG_FUNCTION ("parse_cli");
-    DEBUG_ASSERT (argc != 0);
-    DEBUG_ASSERT (argv != NULL);
-    // *config_file must be non-null only if a configuration file path has been parsed
-    DEBUG_ASSERT (*config_file == NULL);
-
-    /* All of the various command-line options */
-    GOptionEntry cl_opts[] = {
-        { "antialias",          'a', 0, G_OPTION_ARG_NONE,      &(cli_options->antialias),         N_("Use Antialiased Fonts"), NULL },
-        { "background-color",   'b', 0, G_OPTION_ARG_STRING,    &(cli_options->background_color),  N_("Set the background color"), NULL },
-        { "command",            'c', 0, G_OPTION_ARG_STRING,    &(cli_options->command),           N_("Run a command at startup"), NULL },
-        { "hidden",             'h', 0, G_OPTION_ARG_NONE,      &(cli_options->hidden),            N_("Start Tilda hidden"), NULL },
-        { "font",               'f', 0, G_OPTION_ARG_STRING,    &(cli_options->font),              N_("Set the font to the following string"), NULL },
-        { "config-file",        'g', 0, G_OPTION_ARG_STRING,    config_file,                       N_("Configuration file"), NULL },
-        { "lines",              'l', 0, G_OPTION_ARG_INT,       &(cli_options->lines),             N_("Scrollback Lines"), NULL },
-        { "scrollbar",          's', 0, G_OPTION_ARG_NONE,      &(cli_options->scrollbar),         N_("Use Scrollbar"), NULL },
-        { "version",            'v', 0, G_OPTION_ARG_NONE,      &(cli_options->version),           N_("Print the version, then exit"), NULL },
-        { "working-dir",        'w', 0, G_OPTION_ARG_STRING,    &(cli_options->working_dir),       N_("Set Initial Working Directory"), NULL },
-        { "x-pos",              'x', 0, G_OPTION_ARG_INT,       &(cli_options->x_pos),             N_("X Position"), NULL },
-        { "y-pos",              'y', 0, G_OPTION_ARG_INT,       &(cli_options->y_pos),             N_("Y Position"), NULL },
-#ifdef VTE_290
-        { "image",              'B', 0, G_OPTION_ARG_STRING,    &(cli_options->image),             N_("Set Background Image"), NULL },
-        { "transparency",       't', 0, G_OPTION_ARG_INT,       &(cli_options->transparency),      N_("Opaqueness: 0-100%"), NULL },
-#else
-        { "background-alpha",   't', 0, G_OPTION_ARG_INT,       &(cli_options->back_alpha),        N_("Opaqueness: 0-100%"), NULL },
-#endif
-        { "config",             'C', 0, G_OPTION_ARG_NONE,      &(cli_options->show_config),       N_("Show Configuration Wizard"), NULL },
-        { NULL }
-    };
-
-    /* Set up the command-line parser */
-    GError *error = NULL;
-    GOptionContext *context = g_option_context_new (NULL);
-    g_option_context_add_main_entries (context, cl_opts, NULL);
-    g_option_context_parse (context, &argc, &argv, &error);
-    g_option_context_free (context);
-
-    /* Check for unknown options, and give a nice message if there are some */
-    if (error)
-    {
-        g_printerr (_("Error parsing command-line options. Try \"tilda --help\"\nto see all possible options.\n\nError message: %s\n"),
-                    error->message);
-
-        exit (EXIT_FAILURE);
-    }
-
-    /* If we need to show the version, show it then exit normally */
-    if (cli_options->version)
-    {
-        g_print ("%s\n\n", TILDA_VERSION);
-
-        g_print ("Copyright (c) 2012-2013 Sebastian Geiger (lanoxx@gmx.net)\n");
-        g_print ("Copyright (c) 2005-2009 Tristan Sloughter (sloutri@iit.edu)\n");
-        g_print ("Copyright (c) 2005-2009 Ira W. Snyder (tilda@irasnyder.com)\n\n");
-
-        g_print ("General Information: https://github.com/lanoxx/tilda\n");
-        g_print ("Bug Reports: https://github.com/lanoxx/tilda/issues?state=open\n\n");
-
-        g_print ("This program comes with ABSOLUTELY NO WARRANTY.\n");
-        g_print ("This is free software, and you are welcome to redistribute it\n");
-        g_print ("under certain conditions. See the file COPYING for details.\n");
-
-        exit (EXIT_SUCCESS);
-    }
-
-    /* This block is only used to initialize the Glib and GTK internal options. That way the users can pass additional command line options,
-     * that are used by Glib and GTK. We do this separate from the above options, because we pass TRUE to the gtk_get_option group function
-     * which causes GTK to initialize the default display. This way it is possible to invoke `tilda --version` without getting an
-     * error if there is no display available.
-     */
-    error = NULL;
-    context = g_option_context_new (NULL);
-    g_option_context_add_group (context, gtk_get_option_group (TRUE));
-    g_option_context_parse (context, &argc, &argv, &error);
-    g_option_context_free (context);
-
-    if (error)
-    {
-        g_printerr (_("Error parsing Glib and GTK specific command-line options. Try \"tilda --help-all\"\nto see all possible options.\n\nError message: %s\n"),
-                    error->message);
-
-        exit (EXIT_FAILURE);
-    }
-
-    /* TRUE if we should show the config wizard, FALSE otherwize */
-    return cli_options->show_config;
-}
-
-/**
- * Initialize a structure in which command-line parameters will be stored.
- * @return a pointer to that structure
- */
-tilda_cli_options *init_cli_options()
-{
-    tilda_cli_options *options = g_malloc0(sizeof(tilda_cli_options));
-    if (!options)
-    {
-        g_printerr (_("Error allocating memory for a new tilda_cli_options structure.\n"));
-        exit (EXIT_FAILURE);
-    }
-
-    return options;
-}
-
-/**
  * Set values in the config from command-line parameters
  *
  * @param cli_options pointer to a struct containing command-line options
@@ -452,26 +343,14 @@ static void setup_config_from_cli_options(tilda_cli_options *cli_options)
         config_setstr ("font", cli_options->font);
         g_free(cli_options->font);
     }
-#ifdef VTE_290
-    if (cli_options->image != NULL
-            && cli_options->image != config_getstr ("image")) {
-        config_setstr ("image", cli_options->image);
-        g_free(cli_options->image);
-    }
-    if (cli_options->transparency != 0
-            && cli_options->transparency != config_getint ("transparency"))
-    {
-        config_setbool ("enable_transparency", cli_options->transparency);
-        config_setint ("transparency", cli_options->transparency);
-    }
-#else
+
     if (cli_options->back_alpha != 0
             && cli_options->back_alpha != config_getint ("back_alpha"))
     {
         config_setbool ("enable_transparency", ~cli_options->back_alpha & 0xffff);
         config_setint ("back_alpha", cli_options->back_alpha);
     }
-#endif
+
     if (cli_options->working_dir != NULL
             && cli_options->working_dir != config_getstr ("working_dir")) {
         config_setstr ("working_dir", cli_options->working_dir);
@@ -488,9 +367,6 @@ static void setup_config_from_cli_options(tilda_cli_options *cli_options)
             && cli_options->y_pos != config_getint ("y_pos"))
         config_setint ("y_pos", cli_options->y_pos);
 
-    if (cli_options->antialias != FALSE
-            && cli_options->antialias != config_getbool ("antialias"))
-        config_setbool ("antialias", cli_options->antialias);
     if (cli_options->hidden != FALSE
             && cli_options->hidden != config_getbool ("hidden"))
         config_setbool ("hidden", cli_options->hidden);
@@ -526,11 +402,27 @@ static gchar *get_config_file_name (gint instance)
     config_file = g_strdup_printf ("%s%d", config_file_prefix, instance);
     g_free (config_file_prefix);
 
+    /* resolve possible symlink pointing to a different location. */
+    gchar * resolved_config_file = realpath (config_file, NULL);
+
+    if (g_strcmp0 (config_file, resolved_config_file) != 0) {
+        g_debug ("Config file at '%s' points to '%s'", config_file, resolved_config_file);
+    }
+
+    if (resolved_config_file != NULL) {
+        g_free (config_file);
+        /* resolved_config_file must be freed with free(3) so we duplicate the
+         * string to ensure that what ever we return from this function can be
+         * freed with g_free(). */
+        config_file = g_strdup (resolved_config_file);
+        free (resolved_config_file);
+    }
+
     return config_file;
 }
 
-static gint _cmp_locks(gint a, gint b) {
-  return a - b;
+static gint _cmp_locks(gconstpointer a, gconstpointer b, gpointer userdata) {
+  return GPOINTER_TO_INT (a) - GPOINTER_TO_INT (b);
 }
 
 /**
@@ -577,7 +469,7 @@ static gint get_instance_number ()
 
         if (lock != NULL)
         {
-            g_sequence_insert_sorted(seq, GINT_TO_POINTER(lock->instance), (GCompareDataFunc)_cmp_locks, NULL);
+            g_sequence_insert_sorted(seq, GINT_TO_POINTER(lock->instance), _cmp_locks, NULL);
             g_free (lock);
         }
     }
@@ -626,27 +518,6 @@ static void migrate_config_files(char *old_config_path) {
     g_free(new_config_dir);
 }
 
-static void load_application_css () {
-    GtkCssProvider *provider;
-    const gchar* style;
-    GError *error;
-
-    provider = gtk_css_provider_new ();
-
-    gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
-                                               GTK_STYLE_PROVIDER (provider),
-                                               GTK_STYLE_PROVIDER_PRIORITY_USER);
-
-    style = "#search{background:#fff;}";
-    error = NULL;
-    gtk_css_provider_load_from_data (provider, style, -1, &error);
-
-    if (error) {
-        g_print ("Error %s\n", error->message);
-        g_error_free (error);
-    }
-}
-
 static void load_custom_css_file () {
     GtkCssProvider *provider;
     GFile *file;
@@ -682,30 +553,23 @@ static void load_custom_css_file () {
     g_free (filename);
 }
 
-#ifdef DEBUG
-void tilda_log_handler(const gchar *log_domain,
-                       GLogLevelFlags log_level,
-                       const gchar *message,
-                       gpointer user_data)
-{
-    g_printf("%s\n", message);
-}
-#endif
-
 int main (int argc, char *argv[])
 {
-    DEBUG_FUNCTION_MESSAGE ("main", "Using libvte version: %i.%i.%i\n",
-                            VTE_MAJOR_VERSION, VTE_MINOR_VERSION, VTE_MICRO_VERSION);
-
 #ifdef DEBUG
     /**
-     * This allows us to adjust the logging of debug messages at compile time.
-     * By default, the glib g_log_default_handler does not output log messages
-     * with debug and info levels. However by setting our custom handler
-     * we will always output these messages.
+     * This enables the tilda log domain while we are in debug mode. This
+     * is for convenience such that we do not need to start tilda with
+     * 'G_MESSAGES_DEBUG=tilda ./tilda' each time we start tilda.
      */
-    g_log_set_default_handler (tilda_log_handler, NULL);
+
+    g_setenv ("G_MESSAGES_DEBUG", "tilda", FALSE);
 #endif
+
+    DEBUG_FUNCTION_MESSAGE ("main", "Using libvte version: %i.%i.%i",
+                            VTE_MAJOR_VERSION, VTE_MINOR_VERSION, VTE_MICRO_VERSION);
+
+    /* Set supported backend to X11 */
+    gdk_set_allowed_backends ("x11");
 
     tilda_window tw;
     /* NULL set the tw pointers so we can get a clean exit on initialization failure */
@@ -779,8 +643,8 @@ int main (int argc, char *argv[])
     config_file = NULL;
 
     /* Parse the command line */
-    tilda_cli_options *cli_options = init_cli_options();
-    need_wizard = parse_cli (argc, argv, cli_options, &config_file);
+    tilda_cli_options *cli_options = tilda_cli_options_new ();
+    need_wizard = tilda_cli_options_parse_options (cli_options, argc, argv, &config_file);
 
     if (config_file) {	  // if there was a config file specified via cli
         if (!g_file_test (config_file, G_FILE_TEST_EXISTS)) {
@@ -792,18 +656,17 @@ int main (int argc, char *argv[])
         config_file = get_config_file_name (lock.instance);
     }
 
+    /* Initialize GTK. Any code that interacts with GTK (e.g. creating a widget)
+     * should come after this call. Gtk initialization should happen before we
+     * initialize the config file. */
+    gtk_init (&argc, &argv);
+
     /* Start up the configuration system and load from file */
     gint config_init_result = config_init (config_file);
 
     /* Set up possible overridden config options */
     setup_config_from_cli_options(cli_options);
     g_free(cli_options);
-
-    /* We're about to startup X, so set the error handler. */
-    XSetErrorHandler (xerror_handler);
-
-    /* Initialize GTK. Any code that interacts with GTK (e.g. creating a widget) should come after this call. */
-    gtk_init (&argc, &argv);
 
     /* This section shows a modal dialog to notify the user that something has gone wrong when loading the config.
      * Earlier version only used to print a message to stderr, but since tilda is usually not started from a
@@ -824,7 +687,6 @@ int main (int argc, char *argv[])
         gtk_widget_destroy(dialog);
     }
 
-    load_application_css ();
     load_custom_css_file ();
 
     /* create new tilda_window */
@@ -867,7 +729,7 @@ int main (int argc, char *argv[])
      *
      * Note that the key will be bound upon exiting the wizard */
     if (need_wizard) {
-        g_print ("Starting the wizard to configure tilda options.");
+        g_print ("Starting the wizard to configure tilda options.\n");
         wizard (&tw);
     } else {
         gint ret = tilda_keygrabber_bind (config_getstr ("key"), &tw);

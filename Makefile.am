@@ -16,7 +16,7 @@ MAINTAINERCLEANFILES = \
 		compile \
 		INSTALL \
 		m4/*.m4 \
-		tilda-config.h \
+		config.h \
 		config.guess \
 		config.rpath \
 		config.sub \
@@ -33,13 +33,13 @@ MAINTAINERCLEANFILES = \
 		po/quot.sed \
 		po/remove-potcdate.sin \
 		po/tilda.pot \
-		tilda-config.h.in \
-		tilda-config.h.in~
+		config.h.in \
+		config.h.in~
 
 Applicationsdir = ${datadir}/applications
 Applications_DATA = tilda.desktop
 
-Appdatadir = ${datadir}/appdata
+Appdatadir = ${datadir}/metainfo
 Appdata_DATA = tilda.appdata.xml
 
 Pixmapsdir = ${datadir}/pixmaps
@@ -55,7 +55,9 @@ tilda.desktop: tilda.desktop.in
 ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
 
 
-bin_PROGRAMS = 
+bin_PROGRAMS =
 
+man1_MANS =
+
+include data/Makefile.am
 include src/Makefile.am
-
